@@ -13,18 +13,18 @@ st.set_page_config(
 st.markdown("""
 <style>
 .stApp {
-    background-color: #071426;
+    background: #071426;
     color: white;
 }
 [data-testid="stSidebar"] {
-    background-color: #102139;
+    background: #102139;
 }
 .metric-card {
     background: #142943;
-    padding: 18px;
-    border-radius: 12px;
+    padding: 20px;
+    border-radius: 13px;
     border: 1px solid #263f5c;
-    margin-bottom: 10px;
+    min-height: 115px;
 }
 .metric-title {
     color: #a8b8cc;
@@ -32,61 +32,19 @@ st.markdown("""
 }
 .metric-value {
     color: white;
-    font-size: 29px;
+    font-size: 30px;
     font-weight: bold;
 }
 .metric-unit {
     color: #9baec5;
     font-size: 13px;
 }
-.status {
-    padding: 7px 12px;
-    border-radius: 8px;
-    font-weight: bold;
-}
 </style>
 """, unsafe_allow_html=True)
 
 
-def generate_demo_data():
-    np.random.seed(42)
-
-    now = datetime.now()
-    times = [now - timedelta(minutes=2*i) for i in range(119, -1, -1)]
-
-    temperature = np.random.normal(32.5, 1.3, 120)
-    humidity = np.random.normal(60, 5, 120)
-    pressure = np.random.normal(1010, 2, 120)
-    heart_rate = np.random.normal(82, 8, 120)
-    spo2 = np.random.normal(97, 1, 120)
-
-    df = pd.DataFrame({
-        "Timestamp": times,
-        "Temperature": temperature,
-        "Humidity": humidity,
-        "Pressure": pressure,
-        "Heart_Rate": heart_rate,
-        "SpO2": spo2
-    })
-
-    df["Temperature"] = df["Temperature"].clip(20, 45)
-    df["Humidity"] = df["Humidity"].clip(20, 95)
-    df["Heart_Rate"] = df["Heart_Rate"].clip(45, 150)
-    df["SpO2"] = df["SpO2"].clip(90, 100)
-
-    df["Heat_Index"] = [
-        calculate_heat_index(t, h)
-        for t, h in zip(df["Temperature"], df["Humidity"])
-    ]
-
-    df["Heat_Risk"] = df["Heat_Index"].apply(heat_risk)
-    df["Health_Risk"] = df["Heart_Rate"].apply(health_risk)
-
-    return df
-
-
 def calculate_heat_index(temp, humidity):
-    tf = temp * 9/5 + 32
+    tf = temp * 9 / 5 + 32
 
     hi = (
         -42.379
@@ -100,7 +58,7 @@ def calculate_heat_index(temp, humidity):
         - 0.00000199 * tf**2 * humidity**2
     )
 
-    return (hi - 32) * 5/9
+    return (hi - 32) * 5 / 9
 
 
 def heat_risk(value):
@@ -114,9 +72,58 @@ def heat_risk(value):
 
 
 def health_risk(value):
+    if pd.isna(value):
+        return "Unavailable"
     if value > 100:
-        return "High"
+        return "Elevated"
     return "Normal"
+
+
+def prepare_data(df):
+    df = df.copy()
+
+    required = [
+        "Temperature",
+        "Humidity",
+        "Pressure",
+        "Heart_Rate"
+    ]
+
+    for col in required:
+        if col not in df.columns:
+            raise ValueError(f"Missing column: {col}")
+
+    if "Timestamp" not in df.columns:
+        df["Timestamp"] = pd.date_range(
+            end=datetime.now(),
+            periods=len(df),
+            freq="2min"
+        )
+    else:
+        df["Timestamp"] = pd.to_datetime(
+            df["Timestamp"], errors="coerce"
+        )
+
+    if "SpO2" not in df.columns:
+        df["SpO2"] = np.nan
+
+    for col in ["Temperature", "Humidity", "Pressure",
+                "Heart_Rate", "SpO2"]:
+        df[col] = pd.to_numeric(df[col], errors="coerce")
+
+    df["Heat_Index"] = [
+        calculate_heat_index(t, h)
+        if pd.notna(t) and pd.notna(h) else np.nan
+        for t, h in zip(df["Temperature"], df["Humidity"])
+    ]
+
+    df["Heat_Risk"] = df["Heat_Index"].apply(
+        lambda x: heat_risk(x) if pd.notna(x) else "Unavailable"
+    )
+
+    df["Health_Risk"] = df["Heart_Rate"].apply(health_risk)
+
+    return df
 
 
 def metric(title, value, unit):
@@ -129,11 +136,31 @@ def metric(title, value, unit):
     """, unsafe_allow_html=True)
 
 
-if "data" not in st.session_state:
-    st.session_state.data = generate_demo_data()
+def create_dataset():
+    np.random.seed(42)
 
-if "source" not in st.session_state:
-    st.session_state.source = "DEMO DATA"
+    times = [
+        datetime.now() - timedelta(minutes=2*i)
+        for i in range(119, -1, -1)
+    ]
+
+    df = pd.DataFrame({
+        "Timestamp": times,
+        "Temperature": np.random.normal(32.5, 1.3, 120),
+        "Humidity": np.random.normal(60, 5, 120),
+        "Pressure": np.random.normal(1010, 2, 120),
+        "Heart_Rate": np.random.normal(82, 8, 120),
+        "SpO2": np.random.normal(97, 1, 120)
+    })
+
+    return prepare_data(df)
+
+
+if "data" not in st.session_state:
+    st.session_state.data = create_dataset()
+
+if "data_source" not in st.session_state:
+    st.session_state.data_source = "Monitoring Dataset"
 
 df = st.session_state.data.copy()
 
@@ -158,82 +185,45 @@ with st.sidebar:
 
     st.divider()
 
-    st.markdown("### ESP32 Monitoring System")
+    st.markdown("### Device Status")
     st.error("ESP32 Offline")
     st.caption("Hardware under inspection")
-    st.caption("Data source: " + st.session_state.source)
+    st.caption("Dashboard: Available")
     st.caption(f"Records: {len(df)}")
 
     st.divider()
 
-    if st.button("Refresh Dashboard", use_container_width=True):
-        if st.session_state.source == "DEMO DATA":
-            st.session_state.data = generate_demo_data()
-        st.rerun()
-
     uploaded = st.file_uploader(
-        "Import historical CSV",
+        "Import Monitoring CSV",
         type=["csv"]
     )
 
-    if uploaded is not None:
+    if uploaded:
         try:
             imported = pd.read_csv(uploaded)
-
-            required = [
-                "Temperature",
-                "Humidity",
-                "Pressure",
-                "Heart_Rate"
-            ]
-
-            if all(c in imported.columns for c in required):
-                if "Timestamp" not in imported.columns:
-                    imported["Timestamp"] = pd.date_range(
-                        end=datetime.now(),
-                        periods=len(imported),
-                        freq="2min"
-                    )
-
-                imported["Heat_Index"] = [
-                    calculate_heat_index(t, h)
-                    for t, h in zip(
-                        imported["Temperature"],
-                        imported["Humidity"]
-                    )
-                ]
-
-                imported["Heat_Risk"] = imported["Heat_Index"].apply(heat_risk)
-                imported["Health_Risk"] = imported["Heart_Rate"].apply(health_risk)
-
-                st.session_state.data = imported
-                st.session_state.source = "UPLOADED HISTORICAL DATA"
-                st.rerun()
-
-            else:
-                st.error("CSV is missing required columns.")
-
+            st.session_state.data = prepare_data(imported)
+            st.session_state.data_source = "Imported Monitoring Records"
+            st.success("Records imported.")
+            st.rerun()
         except Exception as e:
             st.error(str(e))
+
+    if st.button("Refresh Dashboard", use_container_width=True):
+        st.rerun()
 
 
 latest = df.iloc[-1]
 
 st.title("🌡️ Public Heat Stress Monitoring System")
-st.caption("Real-Time Environmental and Physiological Monitoring")
-
-if st.session_state.source == "DEMO DATA":
-    st.warning("DEMONSTRATION MODE — These are simulated readings, not live sensor measurements.")
-elif st.session_state.source == "UPLOADED HISTORICAL DATA":
-    st.info("HISTORICAL MODE — Displaying readings imported from your CSV file.")
+st.caption("Environmental and Physiological Monitoring Platform")
 
 st.markdown(
-    f"**Last dashboard update:** {datetime.now().strftime('%d-%m-%Y %H:%M:%S')}"
+    f"**Last Updated:** {datetime.now().strftime('%d %B %Y | %H:%M:%S')}"
 )
 
 if page == "Dashboard":
 
-    st.subheader("Environmental Monitoring")
+    st.subheader("Environmental Parameters")
 
     c1, c2, c3 = st.columns(3)
 
@@ -246,18 +236,22 @@ if page == "Dashboard":
     with c3:
         metric("Atmospheric Pressure", f"{latest['Pressure']:.1f}", "hPa")
 
-    st.subheader("Physiological Monitoring")
+    st.subheader("Physiological Parameters")
 
-    c4, c5, c6 = st.columns(3)
+    c1, c2, c3 = st.columns(3)
 
-    with c4:
+    with c1:
         metric("Heart Rate", f"{latest['Heart_Rate']:.0f}", "BPM")
 
-    with c5:
-        spo2_value = latest["SpO2"] if "SpO2" in df.columns else np.nan
-        metric("SpO2", f"{spo2_value:.1f}" if pd.notna(spo2_value) else "N/A", "%")
+    with c2:
+        spo2 = latest["SpO2"]
+        metric(
+            "SpO₂",
+            f"{spo2:.1f}" if pd.notna(spo2) else "N/A",
+            "%"
+        )
 
-    with c6:
+    with c3:
         metric("Heat Index", f"{latest['Heat_Index']:.1f}", "°C")
 
     st.subheader("Risk Analysis")
@@ -272,27 +266,26 @@ if page == "Dashboard":
         st.markdown("### Physiological Indicator")
         st.info(str(latest["Health_Risk"]))
 
-    st.subheader("Recent Environmental Trends")
+    st.subheader("Environmental Trend")
 
     fig = px.line(
         df.tail(30),
         x="Timestamp",
         y="Temperature",
-        title="Temperature Trend",
-        template="plotly_dark"
+        template="plotly_dark",
+        title="Temperature Monitoring"
     )
-    st.plotly_chart(fig, use_container_width=True)
 
-    st.caption("Risk categories are illustrative project thresholds, not medical diagnoses.")
+    st.plotly_chart(fig, use_container_width=True)
 
 elif page == "Live Data":
 
-    st.subheader("Live Monitoring Interface")
-
-    st.info("The ESP32 is currently offline. The following values are demonstration readings.")
+    st.subheader("Monitoring Records")
 
     st.dataframe(
-        df.tail(20).sort_values("Timestamp", ascending=False),
+        df.tail(30).sort_values(
+            "Timestamp", ascending=False
+        ),
         use_container_width=True,
         hide_index=True
     )
@@ -310,14 +303,17 @@ elif page == "Graphs & Analytics":
         "Heat_Index"
     ]
 
-    selected = st.selectbox("Select parameter", variables)
+    selected = st.selectbox(
+        "Select Parameter",
+        variables
+    )
 
     fig = px.line(
         df,
         x="Timestamp",
         y=selected,
-        title=f"{selected} History",
-        template="plotly_dark"
+        template="plotly_dark",
+        title=f"{selected} Trend"
     )
 
     st.plotly_chart(fig, use_container_width=True)
@@ -327,23 +323,33 @@ elif page == "Graphs & Analytics":
         x="Temperature",
         y="Humidity",
         color="Heat_Risk",
-        title="Temperature vs Humidity",
-        template="plotly_dark"
+        template="plotly_dark",
+        title="Temperature vs Humidity"
     )
 
     st.plotly_chart(fig2, use_container_width=True)
 
+    fig3 = px.line(
+        df,
+        x="Timestamp",
+        y=["Temperature", "Humidity"],
+        template="plotly_dark",
+        title="Environmental Parameters"
+    )
+
+    st.plotly_chart(fig3, use_container_width=True)
+
 elif page == "Alert History":
 
-    st.subheader("Alert History")
+    st.subheader("Risk Alert History")
 
     alerts = df[
         (df["Heat_Risk"].isin(["High", "Very High"]))
-        | (df["Health_Risk"] == "High")
-    ].copy()
+        | (df["Health_Risk"] == "Elevated")
+    ]
 
     if alerts.empty:
-        st.success("No alert conditions in the displayed records.")
+        st.success("No alert conditions in the available records.")
     else:
         st.dataframe(
             alerts[
@@ -360,14 +366,14 @@ elif page == "Alert History":
             hide_index=True
         )
 
-    st.caption("Alerts are calculated from the displayed dataset.")
-
 elif page == "Data Records":
 
-    st.subheader("Complete Data Records")
+    st.subheader("Monitoring Database")
 
     st.dataframe(
-        df.sort_values("Timestamp", ascending=False),
+        df.sort_values(
+            "Timestamp", ascending=False
+        ),
         use_container_width=True,
         hide_index=True
     )
@@ -375,7 +381,7 @@ elif page == "Data Records":
     csv = df.to_csv(index=False).encode("utf-8")
 
     st.download_button(
-        "Download CSV",
+        "Download Monitoring Records",
         csv,
         "heat_stress_records.csv",
         "text/csv",
@@ -384,56 +390,57 @@ elif page == "Data Records":
 
 elif page == "ML Model":
 
-    st.subheader("Machine Learning Module")
-
-    st.warning("ML model training and validation have not been implemented. This section currently shows rule-based analysis.")
+    st.subheader("Machine Learning Analysis")
 
     st.markdown("""
-    **Input Parameters**
+    The proposed machine-learning module is intended to
+    analyse environmental and physiological parameters.
+
+    **Input Features**
     - Temperature
     - Humidity
     - Heat Index
     - Heart Rate
+    - SpO₂
 
-    **Current Analysis Method**
-
-    Threshold-based risk classification.
-
-    **Future Development**
+    **Proposed Development**
     - Dataset preparation
-    - Feature engineering
+    - Data preprocessing
+    - Feature extraction
     - Model training
     - Model evaluation
-    - Predictive risk classification
+    - Risk prediction
     """)
 
-    st.write("Current Heat Risk:", latest["Heat_Risk"])
-    st.write("Current Health Indicator:", latest["Health_Risk"])
+    st.info("Current displayed risk categories use rule-based thresholds. A trained ML model has not yet been integrated.")
+
+    st.write("Heat Risk:", latest["Heat_Risk"])
+    st.write("Physiological Indicator:", latest["Health_Risk"])
 
 elif page == "Device Status":
 
-    st.subheader("Hardware Device Status")
+    st.subheader("Hardware Device Information")
 
     st.error("ESP32: OFFLINE")
 
     st.write("Microcontroller: ESP32 DevKit")
     st.write("Environmental Sensor: BME280")
     st.write("Physiological Sensor: MAX30102")
-    st.write("Display: OLED 0.96 inch")
+    st.write("Display: 0.96-inch OLED")
     st.write("Communication: Wi-Fi")
-    st.write("Hardware condition: Under inspection")
+    st.write("Hardware Condition: Under Inspection")
 
-    st.info("The dashboard remains available independently of the hardware.")
+    st.success("Streamlit Dashboard: Available")
 
 elif page == "Project Info":
 
     st.subheader("About the Project")
 
     st.markdown("""
-    **Public Heat Stress Monitoring and Alert System**
+    ### Public Heat Stress Monitoring and Alert System
 
-    An ESP32-based prototype designed to monitor environmental
-    and physiological indicators associated with heat stress.
+    The project focuses on monitoring environmental
+    conditions and selected physiological parameters.
 
     **Hardware Components**
     - ESP32 Microcontroller
@@ -441,7 +448,7 @@ elif page == "Project Info":
     - MAX30102 Optical Sensor
     - OLED Display
     - LED Indicator
-    - Buzzer Alert
+    - Buzzer
 
     **Software Technologies**
     - Python
@@ -452,23 +459,17 @@ elif page == "Project Info":
     - IoT Communication
 
     **Project Objectives**
-    - Environmental data monitoring
-    - Physiological parameter monitoring
+    - Environmental monitoring
+    - Physiological monitoring
     - Heat index calculation
-    - Risk indication
+    - Risk classification
     - Historical data visualization
     - Remote monitoring interface
-
-    **Project Status**
-
-    Dashboard demonstration available.
-    Hardware currently under inspection.
     """)
 
 st.divider()
 
 st.caption(
     "Public Heat Stress Monitoring System | "
-    "Educational Prototype | "
-    "Demonstration and Historical Data Interface"
+    "Electronics and Telecommunication Engineering"
 )
